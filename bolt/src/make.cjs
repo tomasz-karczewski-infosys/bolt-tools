@@ -32,6 +32,56 @@ const { PackageDependencyResolver } = require('./PackageDependencyResolver.cjs')
 const { PackageConfig } = require('./PackageConfig.cjs');
 const { PackageConfigBuilder } = require('./PackageConfigBuilder.cjs');
 
+const DEFAULT_ENCRYPT_BACKEND = 'luks'
+const DEFAULT_ENCRYPT_ALGORITHM = 'RSA-OAEP-256'
+const DEFAULT_ENCRYPT_CIPHER = 'aes-xts-plain64'
+const DEFAULT_ENCRYPT_KEYSIZE = '512'
+const DEFAULT_LUKS_TYPE = 'luks2'
+const DEFAULT_LUKS_METADATA_SIZE = '512k'
+const DEFAULT_KEYSLOTS_SIZE = '2m'
+
+/**
+ * Validates a command option and stores its resolved value.
+ *
+ * @param params command-line parameters object.
+ * @param result command options to update.
+ * @param name param name without the `--` prefix.
+ * @param allowedValues Allowed values; use `[]` for a valueless flag or `'*'` for any required non-empty value.
+ * @param defaultValue default applied when no value is passed
+ * @returns true if the option is valid; otherwise false
+ */
+function validateAllowedOption(params, result, name, allowedValues, defaultValue) {
+  const value = params.options[name];
+
+  if (Array.isArray(allowedValues) && allowedValues.length === 0) {
+    if (value !== '') {
+      console.error('--' + name + ' does not accept a value');
+      return false;
+    }
+    result[name] = defaultValue;
+    return true;
+  }
+
+  if (allowedValues === '*') {
+    if (value === '') {
+      console.error('--' + name + ' requires a value');
+      return false;
+    }
+    result[name] = value;
+    return true;
+  }
+
+  if (value !== '' && allowedValues.map(String).includes(value) === false) {
+    console.error('Unsupported value for --' + name + ': ' + JSON.stringify(value) + '; supported values: ' + allowedValues.map(String).join(', '));
+    return false;
+  }
+
+  result[name] = value === ''
+    ? (defaultValue === undefined ? value : defaultValue)
+    : value;
+  return true;
+}
+
 class PackageProvider {
   constructor(packageStore, configStore) {
     this.packageStore = packageStore;
@@ -351,5 +401,42 @@ exports.makeOptions = {
       return true;
     }
     return false;
-  }
+  },
+
+  encrypt(params, result) {
+    return validateAllowedOption(params, result, 'encrypt', [], '');
+  },
+
+  'encrypt-key'(params, result) {
+    return validateAllowedOption(params, result, 'encrypt-key', '*');
+  },
+
+  'encrypt-backend'(params, result) {
+    return validateAllowedOption(params, result, 'encrypt-backend', [DEFAULT_ENCRYPT_BACKEND], DEFAULT_ENCRYPT_BACKEND);
+  },
+
+  'encrypt-algorithm'(params, result) {
+    return validateAllowedOption(params, result, 'encrypt-algorithm', [DEFAULT_ENCRYPT_ALGORITHM], DEFAULT_ENCRYPT_ALGORITHM);
+  },
+
+  'encrypt-cipher'(params, result) {
+    return validateAllowedOption(params, result, 'encrypt-cipher', [DEFAULT_ENCRYPT_CIPHER], DEFAULT_ENCRYPT_CIPHER);
+  },
+
+  'encrypt-keysize'(params, result) {
+    return validateAllowedOption(params, result, 'encrypt-keysize', [DEFAULT_ENCRYPT_KEYSIZE], DEFAULT_ENCRYPT_KEYSIZE);
+  },
+
+  'luks-type'(params, result) {
+    return validateAllowedOption(params, result, 'luks-type', [DEFAULT_LUKS_TYPE], DEFAULT_LUKS_TYPE);
+  },
+
+  'luks-metadata-size'(params, result) {
+    return validateAllowedOption(params, result, 'luks-metadata-size', [DEFAULT_LUKS_METADATA_SIZE], DEFAULT_LUKS_METADATA_SIZE);
+  },
+
+  'luks-keyslots-size'(params, result) {
+    return validateAllowedOption(params, result, 'luks-keyslots-size', [DEFAULT_KEYSLOTS_SIZE], DEFAULT_KEYSLOTS_SIZE);
+  },
+
 };
