@@ -23,6 +23,8 @@ const { ZIPPackageBuilder } = require('./ZIPPackageBuilder.cjs');
 const { commonOptions } = require('./commonOptions.cjs');
 const { exec, execv, assertFile } = require('./utils.cjs');
 const { statSync, mkdirSync, rmSync, readFileSync } = require('node:fs');
+const crypto = require('node:crypto');
+const encryption = require('./encryption.cjs')
 
 function validateConfig(config) {
   if ((config.packageType === "base" || config.packageType === "runtime" || config.packageType === "application") &&
@@ -58,7 +60,7 @@ function pack(configFile, content, options) {
   validateConfig(config);
   const output = `${config.id}+${config.version}`;
 
-  if (hasRalfpack()) {
+  if (hasRalfpack() && !options.encrypt) {
     execv("ralfpack", ["create", "--config", configFile, "--content", content, ...ralfpackSignArgs(options), "--image-format", "erofs.lz4", `${output}.bolt`]);
   } else {
     rmSync(output, { recursive: true, force: true });
@@ -117,6 +119,25 @@ function packInternal(content, config, output, options) {
       "org.rdk.package.content.dmverity.salt": salt,
     }
   });
+
+  if (options.encrypt) {
+    const plaintextMasterKey = crypto.randomBytes(64);
+    try {
+      let jweTokenString = encryption.encryptKeyToJwe(plaintextMasterKey, options["encrypt-key"]);
+      manifest.layers[0].mediaType += "+encrypted";
+      Object.assign(manifest.layers[0].annotations,
+        {
+          // "org.opencontainers.image.dmcrypt.cipher": "aes-xts-plain64",
+          // "org.opencontainers.image.dmcrypt.keysize": "512",
+          // "org.opencontainers.image.dmcrypt.type": "luks2",
+          "org.opencontainers.image.enc.keys.jwe": jweTokenString
+        });
+    } finally {
+      if (plaintextMasterKey) {
+        plaintextMasterKey.fill(0);
+      }
+    }
+  }
 
   const manifestInfo = builder.importObject(manifest);
 

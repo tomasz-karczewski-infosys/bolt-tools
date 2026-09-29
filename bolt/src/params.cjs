@@ -26,7 +26,16 @@ function parse() {
   process.argv.slice(2).forEach(value => {
     if (value.startsWith("--")) {
       const option = value.substring(2).split("=");
-      result.options[option.shift()] = option.join("=");
+      let optionName = option.shift();
+      let optionValue = option.join("=");
+      if (result.options[optionName] && !Array.isArray(result.options[optionName])) {
+        result.options[optionName] = [result.options[optionName]]
+      }
+      if (Array.isArray(result.options[optionName])) {
+        result.options[optionName].push(optionValue);
+      } else {
+        result.options[optionName] = optionValue;
+      }
     } else {
       result.args.push(value);
     }

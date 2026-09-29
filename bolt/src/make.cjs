@@ -48,37 +48,41 @@ const DEFAULT_KEYSLOTS_SIZE = '2m'
  * @param name param name without the `--` prefix.
  * @param allowedValues Allowed values; use `[]` for a valueless flag or `'*'` for any required non-empty value.
  * @param defaultValue default applied when no value is passed
+ * @param repetitionAllowed if repetition is allowed, result[name] will be an array of provided repeated values
  * @returns true if the option is valid; otherwise false
  */
-function validateAllowedOption(params, result, name, allowedValues, defaultValue) {
+function validateAllowedOption(params, result, name, allowedValues, defaultValue, repetitionAllowed = false) {
   const value = params.options[name];
+  let appliedValue = null;
 
   if (Array.isArray(allowedValues) && allowedValues.length === 0) {
     if (value !== '') {
-      console.error('--' + name + ' does not accept a value');
+      console.error('--' + name + ' does not take a value');
       return false;
     }
-    result[name] = defaultValue;
-    return true;
-  }
-
-  if (allowedValues === '*') {
+    appliedValue = defaultValue;
+  } else if (allowedValues === '*') {
     if (value === '') {
-      console.error('--' + name + ' requires a value');
+      console.error(`--${name} requires a value`);
       return false;
     }
-    result[name] = value;
-    return true;
-  }
-
-  if (value !== '' && allowedValues.map(String).includes(value) === false) {
+    appliedValue = value;
+  } else if (value !== '' && allowedValues !== '*' && !allowedValues.map(String).includes(value)) {
     console.error('Unsupported value for --' + name + ': ' + JSON.stringify(value) + '; supported values: ' + allowedValues.map(String).join(', '));
     return false;
+  } else {
+    appliedValue = value || defaultValue || '';
   }
 
-  result[name] = value === ''
-    ? (defaultValue === undefined ? value : defaultValue)
-    : value;
+  if (repetitionAllowed) {
+    if (Array.isArray(appliedValue)) {
+      result[name] = appliedValue;
+    } else {
+      result[name] = [appliedValue];
+    }
+  } else {
+    result[name] = appliedValue
+  }
   return true;
 }
 
@@ -404,11 +408,11 @@ exports.makeOptions = {
   },
 
   encrypt(params, result) {
-    return validateAllowedOption(params, result, 'encrypt', [], '');
+    return validateAllowedOption(params, result, 'encrypt', [], true);
   },
 
   'encrypt-key'(params, result) {
-    return validateAllowedOption(params, result, 'encrypt-key', '*');
+    return validateAllowedOption(params, result, 'encrypt-key', '*', '', true);
   },
 
   'encrypt-backend'(params, result) {

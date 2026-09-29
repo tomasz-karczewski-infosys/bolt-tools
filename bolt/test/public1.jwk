@@ -1,0 +1,7 @@
+{
+  "kty": "RSA",
+  "n": "7RFVmNsoMUkYTRDi34v8vY7OpfJhctrcUcQQJY7tAuHsx8L_pgESXEXTjlEFtGJ5mU0DSvjkZh4aX3mWd7Wt1y4Pm_JROGUfpzDBOnOd4c3z2-roYz8bV-uVoxENTyPsYzeG3MQKdF4Neh-vFCu_F-v6VCfRooYXSVVb4B-gXJ979HLnlULUED14K9aV78U8jxZFiK0qqt1hvrVYSZErQaoqM08U-F6VoQDevpyJXykP9k28xSIMgjH-c5ZkOvcR5Ntp9EMU-1_H_qoJgv3kJb73ArEcNGKJDBfcKu6sdzgROkQhDtuNTIDr-B9xJO_X4qzwAOhxlKXSniqpFLhycw",
+  "e": "AQAB",
+  "alg": "RSA-OAEP-256",
+  "kid": "recipient-public-key-id-1"
+}

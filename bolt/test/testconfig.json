@@ -1,0 +1,8 @@
+{
+  "id": "test1",
+  "version": "0.0.1",
+  "versionName": "develop",
+  "name": "test bolt",
+  "packageType": "base",
+  "entryPoint": "/"
+}
