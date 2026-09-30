@@ -339,7 +339,7 @@ async function makeCommand(packageAlias, workDir, options) {
       }
     }
 
-    pack(packageConfigPath, contentFile, options);
+    await pack(packageConfigPath, contentFile, options);
 
     if (options.install) {
       const packageFileName = Package.makeFileName(packageConfig.getFullName());

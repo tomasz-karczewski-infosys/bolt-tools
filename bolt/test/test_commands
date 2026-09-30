@@ -1,0 +1,21 @@
+../bin/bolt make test --encrypt --encrypt-key=public1.jwk --encrypt-key=public2.jwk
+
+1/ cat blobs/sha256/$(cat index.json | jq -r '.manifests[0].digest' | sed 's/^[^:]*://g') | jq -r '.layers[0].annotations."org.opencontainers.image.enc.keys.jwe"' | base64 --decode > myjwk 
+2/ jose jwe dec -i- -k ../private1.jwk -O ./my_key.bin <myjwk
+# jq -r ".recipients[0].encrypted_key" myjwk | sed 's/\-/\+/g' | sed 's/_/\//g' | base64 --decode > mykey.bin
+3/ cp blobs/sha256/$(jq -r ".manifests[0].digest" index.json | sed 's/^.*sha256://g' | xargs -I{} cat blobs/sha256/{} | jq -r ".contentDigest" | sed 's/^.*sha256://g') ./myluks
+4/ sudo cryptsetup luksOpen myluks --key-file my_key.bin bolt_luks_device
+# verity hash - org.rdk.package.content.dmverity.roothash; offset - org.rdk.package.content.dmverity.offset
+5/ VERITY_HASH=$(cat blobs/sha256/$(cat index.json | jq -r '.manifests[0].digest' | sed 's/^[^:]*://g')  | jq -r '.layers[0].annotations.["org.rdk.package.content.dmverity.roothash"]')
+5.5/ VERITY_OFFSET=$(cat blobs/sha256/$(cat index.json | jq -r '.manifests[0].digest' | sed 's/^[^:]*://g')  | jq -r '.layers[0].annotations.["org.rdk.package.content.dmverity.offset"]')
+6/ sudo veritysetup open /dev/mapper/bolt_luks_device bolt_verity_device /dev/mapper/bolt_luks_device ${VERITY_HASH} --hash-offset=${VERITY_OFFSET}
+
+mkdir mountverity
+sudo mount -t erofs -o ro /dev/mapper/bolt_verity_device ./mountverity
+
+CONTENT_BLOB=`jq -r ".manifests[0].digest" index.json | sed 's/^.*sha256://g' | xargs -I{} cat blobs/sha256/{} | jq -r ".contentDigest" | sed 's/^.*sha256://g'`
+
+sudo umount ./mountverity
+sudo veritysetup close bolt_verity_device
+sudo cryptsetup close bolt_luks_device
+../bin/bolt make test2 --encrypt --encrypt-key=public1.jwk --encrypt-key=public2.jwk --verbose --key=signer.key --cert=signer.pem

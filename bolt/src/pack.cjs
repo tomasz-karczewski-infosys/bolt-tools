@@ -21,7 +21,7 @@ const { makeArtifactManifest } = require('./artifact-manifest.cjs');
 const sha256 = require('./tools/sha256.cjs');
 const { ZIPPackageBuilder } = require('./ZIPPackageBuilder.cjs');
 const { commonOptions } = require('./commonOptions.cjs');
-const { exec, execv, assertFile } = require('./utils.cjs');
+const { exec, execv, assertFile, spawnSync } = require('./utils.cjs');
 const { statSync, mkdirSync, rmSync, readFileSync } = require('node:fs');
 const crypto = require('node:crypto');
 const encryption = require('./encryption.cjs')
@@ -53,7 +53,7 @@ function ralfpackSign(packageFile, options) {
   execv("ralfpack", ["sign", ...ralfpackSignArgs(options), packageFile]);
 }
 
-function pack(configFile, content, options) {
+async function pack(configFile, content, options) {
   assertFile(configFile);
   assertFile(content);
   const config = JSON.parse(readFileSync(configFile));
@@ -66,7 +66,7 @@ function pack(configFile, content, options) {
     rmSync(output, { recursive: true, force: true });
     mkdirSync(output, { recursive: true });
     try {
-      packInternal(content, config, output, options);
+      await packInternal(content, config, output, options);
     } finally {
       rmSync(output, { recursive: true, force: true });
     }
@@ -75,15 +75,35 @@ function pack(configFile, content, options) {
   console.log(`Prepared ${output}.bolt package from ${configFile} and ${content}`);
 }
 
-function packInternal(content, config, output, options) {
+async function packInternal(content, config, output, options) {
   const builder = new ZIPPackageBuilder(output + ".bolt", output);
+  const blockSize = 4096;
 
   const erofsTmpFile = output + '/erofs';
   execv('mkfs.erofs', ['-zlz4', '--all-root', '--tar', '--gzip', erofsTmpFile, content]);
   const erofsTmpFileStat = statSync(erofsTmpFile);
-  const verityInfo = execv('veritysetup',
-    ['format', erofsTmpFile, erofsTmpFile, `--hash-offset=${erofsTmpFileStat.size}`]
-  ).trim().split('\n');
+
+  let jweTokenString;
+  let luksMetadata;
+  let unencryptedContentLayerManifestDigest = null;
+
+  let verityInfo = execv('veritysetup', ['format', `--data-block-size=${blockSize}`, `--hash-block-size=${blockSize}`, erofsTmpFile, erofsTmpFile, `--hash-offset=${erofsTmpFileStat.size}`]).trim().split('\n');
+
+  const plaintextContentInfo = builder.formatFileManifestData(builder.getFileManifestData(erofsTmpFile));
+
+  if (options.encrypt) {
+    const plaintextMasterKey = crypto.randomBytes(64);
+    try {
+      jweTokenString = encryption.encryptKeyToJwe(plaintextMasterKey, options["encrypt-key"]);
+      encryption.createLuksImage(erofsTmpFile, plaintextMasterKey);
+      luksMetadata = encryption.parseLuksData(erofsTmpFile);
+    } finally {
+      if (plaintextMasterKey) {
+        plaintextMasterKey.fill(0);
+      }
+    }
+  }
+
   let rootHash;
   let salt;
 
@@ -103,12 +123,14 @@ function packInternal(content, config, output, options) {
   const contentInfo = builder.importFile(erofsTmpFile);
   const configInfo = builder.importObject(config);
 
+  // plaintextContentInfo digets & size is used, to sign unencrypted manifest
+  // contentSize & contentDigest will later be updated in 'encryption' case
   const manifest = makeArtifactManifest({
     type: config.packageType,
     configSize: configInfo.size,
     configDigest: configInfo.digest,
-    contentSize: contentInfo.size,
-    contentDigest: contentInfo.digest,
+    contentSize: plaintextContentInfo.size,
+    contentDigest: plaintextContentInfo.digest,
   });
 
   Object.assign(manifest.layers[0], {
@@ -121,30 +143,37 @@ function packInternal(content, config, output, options) {
   });
 
   if (options.encrypt) {
-    const plaintextMasterKey = crypto.randomBytes(64);
-    try {
-      let jweTokenString = encryption.encryptKeyToJwe(plaintextMasterKey, options["encrypt-key"]);
-      manifest.layers[0].mediaType += "+encrypted";
-      Object.assign(manifest.layers[0].annotations,
-        {
-          // "org.opencontainers.image.dmcrypt.cipher": "aes-xts-plain64",
-          // "org.opencontainers.image.dmcrypt.keysize": "512",
-          // "org.opencontainers.image.dmcrypt.type": "luks2",
-          "org.opencontainers.image.enc.keys.jwe": jweTokenString
-        });
-    } finally {
-      if (plaintextMasterKey) {
-        plaintextMasterKey.fill(0);
-      }
-    }
+    // when encrypting, we still need to sign the unencrypted version
+    // capture the sha digest before adding any encryption related info
+    unencryptedContentLayerManifestDigest = builder.getObjectManifestData(manifest).digest;
+    // update the manifest size/digest to correspond to encrypted blob that actually got added
+    manifest.contentSize = contentInfo.size;
+    manifest.contentDigest = contentInfo.digest;
+  }
+
+  if (options.encrypt) {
+
+    manifest.layers[0].mediaType += "+encrypted";
+    Object.assign(manifest.layers[0].annotations,
+      {
+        "org.opencontainers.image.dmcrypt.cipher": luksMetadata.cipher,
+        "org.opencontainers.image.dmcrypt.keysize": luksMetadata.keySize,
+        "org.opencontainers.image.dmcrypt.type": `luks${luksMetadata.version}`,
+        "org.opencontainers.image.enc.keys.jwe": jweTokenString,
+        "org.opencontainers.image.dmcrypt.salt": luksMetadata.salt
+      });
   }
 
   const manifestInfo = builder.importObject(manifest);
 
-  writeOCIIndex(builder, { manifestInfo, id: config.id, options, signWithRalfpack: false });
+  if (!options.encrypt) {
+    unencryptedContentLayerManifestDigest = manifestInfo.digest;
+  }
+
+  writeOCIIndex(builder, { manifestInfo, id: config.id, options, signWithRalfpack: false, unencryptedContentLayerManifestDigest });
 }
 
-function writeOCIIndex(builder, { manifestInfo, id, options, signWithRalfpack }) {
+function writeOCIIndex(builder, { manifestInfo, id, options, signWithRalfpack, contentLayerManifestDigest }) {
   const index = {
     "schemaVersion": 2,
     "mediaType": "application/vnd.oci.image.index.v1+json",
@@ -170,7 +199,7 @@ function writeOCIIndex(builder, { manifestInfo, id, options, signWithRalfpack })
           "docker-reference": id,
         },
         "image": {
-          "docker-manifest-digest": `${manifestInfo.digest}`,
+          "docker-manifest-digest": contentLayerManifestDigest,
         },
         "type": "cosign container image signature",
       },

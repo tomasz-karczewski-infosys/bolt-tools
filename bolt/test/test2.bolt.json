@@ -1,0 +1,6 @@
+{
+  "config": "testconfig.json",
+  "direct": {
+	  "archive":"testcontent.tgz"
+  }
+}

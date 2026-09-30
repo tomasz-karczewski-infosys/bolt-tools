@@ -19,7 +19,7 @@
 
 const { renameSync, copyFileSync, linkSync, unlinkSync, mkdtempSync, statSync, lstatSync, rmSync, realpathSync, lutimesSync, readdirSync } = require('node:fs');
 const { join, dirname, basename, isAbsolute, resolve, relative, sep } = require('node:path');
-const { execSync, execFileSync } = require('node:child_process');
+const { execSync, execFileSync, spawnSync: nodeSpawnSync } = require('node:child_process');
 const config = require('./config.cjs');
 
 function runSync(params, run) {
@@ -59,6 +59,14 @@ function execv(file, args, params) {
   const output = runSync(params, opts => execFileSync(file, args, opts));
   if (config.verbose && output) console.log(output.trim());
   return output;
+}
+
+// Pass stdin (including a Buffer) via params.input; return the native spawn result.
+function spawnSync(file, args, params) {
+  if (config.verbose) console.log(`${file} ${args.join(' ')}`);
+  const result = runSync(params, opts => nodeSpawnSync(file, args, opts));
+  if (config.verbose && result.stdout) console.log(result.stdout.toString().trim());
+  return result;
 }
 
 function moveSync(from, to) {
@@ -164,6 +172,7 @@ function touchUnder(baseDir, relPath) {
 
 exports.exec = exec;
 exports.execv = execv;
+exports.spawnSync = spawnSync;
 exports.execNoOutput = execNoOutput;
 exports.moveSync = moveSync;
 exports.linkOrCopySync = linkOrCopySync;

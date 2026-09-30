@@ -1,5 +1,7 @@
 const crypto = require('node:crypto');
 const fs = require('node:fs')
+const { exec, spawnSync } = require('./utils.cjs');
+const { default: assert } = require('node:assert');
 
 // Helper function to encode a Buffer into a Base64URL string
 function base64url(buffer) {
@@ -70,11 +72,87 @@ function encryptKeyToJwe(plaintextMasterKey, publicKeyJwkPaths) {
         })
     }
 
-    return base64url(Buffer.from(JSON.stringify(jwe)));
+    return Buffer.from(JSON.stringify(jwe),'utf-8').toString('base64')
+    // TODO: or should that be url-encoded? return base64url(Buffer.from(JSON.stringify(jwe)));
+}
+
+function createLuksImage(inputLuks, plaintextMasterKey) {
+    const blockSize = 4096;
+    const luksOffsetSectors512b = 576;
+    const luksReduceSizeSectors512b = 2 * 576;
+
+    // add space for the LUKS header + tmp space for LUKS reencryption
+    exec(`dd if=/dev/zero bs=512 count=${luksReduceSizeSectors512b} of=${inputLuks} conv=notrunc oflag=append`);
+    // finally, convert the image to luks in-place; the master key is read
+    // via stdin, directly from plaintextMasterKey Buffer
+    const spawnRet = spawnSync('cryptsetup', [
+        'reencrypt',
+        '--encrypt',
+        '--type','luks2',
+        '--sector-size', blockSize,
+        '--offset',luksOffsetSectors512b,
+        '--disable-locks',
+        '--force-offline-reencrypt',
+        '--reduce-device-size', `${luksReduceSizeSectors512b}S`,
+        '--key-file','-',
+        '--key-size','512',
+        '--batch-mode',
+        '--pbkdf','pbkdf2',
+        '--pbkdf-force-iterations','1000',
+        '--pbkdf-memory','0',
+        '--pbkdf-parallel','0',
+        '--luks2-metadata-size','16k',
+        '--luks2-keyslots-size','256k',
+        inputLuks],
+        { input: plaintextMasterKey });
+
+    if (spawnRet.status != 0) {
+        throw new Error(`cryptsetup returned error; spawn returned: ${spawnRet}`);
+    }
+
+    // trim the 'workspace'; it was only needed by cryptsetup reencrypt
+    const junkSizeAtEnd = luksOffsetSectors512b * 512;
+    const currentFileSize = fs.statSync(inputLuks).size;
+    fs.truncateSync(inputLuks, currentFileSize - junkSizeAtEnd);
+}
+
+
+function parseLuksData(image) {
+    luksInfo = exec(`cryptsetup luksDump ${image}`).trim().split('\n');
+    let match, version, inKeyslots = false, cipher, salt = '', parsingsalt = false, keyLength;
+    for (line of luksInfo) {
+        if (match = line.match(/Version:\s+(\d+)/)) {
+            version = match[1]
+        } else if (match = line.match(/^Keyslots:/)) {
+            inKeyslots = true;
+        } else if (inKeyslots && (match = line.match(/^\s*Cipher:\s*([^\s]+)/))) {
+            cipher = match[1];
+        } else if (inKeyslots && (match = line.match(/Cipher key: (\d+) bits/))) {
+            keyLength = match[1];
+        } else if (inKeyslots && (match = line.match(/^\s*Salt:\s*([a-f0-9\s]+)/))) {
+            salt += match[1].trim().replaceAll(' ','');
+            parsingsalt = true;
+        } else if (parsingsalt && ( match = line.match(/^\s*([a-f0-9 ]+)$/))) {
+            salt += match[1].trim().replaceAll(' ','');
+        } else {
+            parsingsalt = false;
+            if (line.match(/Tokens/)) {
+                inKeyslots = false;
+            }
+        }
+    }
+    const encodedSalt = Buffer.from(salt, 'hex').toString('base64');
+    let ret = {version, cipher, salt: encodedSalt, keyLength};
+    if (! [version, cipher, encodedSalt, keyLength].every(str => str && str.trim().length > 0)) {
+        throw new Error(`failed to parse some luks data: ${ret}`)
+    }
+    return ret;
 }
 
 module.exports = {
     encryptKeyToJwe,
     base64url,
-    base64urlDecode
+    base64urlDecode,
+    createLuksImage,
+    parseLuksData
 }
